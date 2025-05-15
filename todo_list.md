@@ -78,5 +78,7 @@
 - [ ] improve coverage of the code
 - [ ] modular yaml import so that ir-sim can read the yaml file separately
 - [ ] Add the interface with opendrive
-- [ ] Complete the collision mode
+- [ ] Complete the reactive collision mode
 - [ ] Interface with URDF file
+- [ ] Add subwindows for the simulation
+- [x] Formulate the geometry tree for the collision check

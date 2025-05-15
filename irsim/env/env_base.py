@@ -28,6 +28,7 @@ from typing import Optional
 import importlib
 from irsim.world import ObjectBase
 from tabulate import tabulate
+from shapely.strtree import STRtree
 
 try:
     from pynput import keyboard
@@ -66,26 +67,26 @@ class EnvBase:
         self.display = display
         self.disable_all_plot = disable_all_plot
         self.save_ani = save_ani
-        self.logger = EnvLogger(log_file, log_level)
-        env_param.logger = self.logger
+        env_param.logger = EnvLogger(log_file, log_level)
 
         self.env_config = EnvConfig(world_name)
-        object_factory = ObjectFactory()
+        self.object_factory = ObjectFactory()
         # init objects (world, obstacle, robot)
 
         self._world = World(world_name, **self.env_config.parse["world"])
 
-        self._robot_collection = object_factory.create_from_parse(
+        self._robot_collection = self.object_factory.create_from_parse(
             self.env_config.parse["robot"], "robot"
         )
-        self._obstacle_collection = object_factory.create_from_parse(
+        self._obstacle_collection = self.object_factory.create_from_parse(
             self.env_config.parse["obstacle"], "obstacle"
         )
-        self._map_collection = object_factory.create_from_map(
+        self._map_collection = self.object_factory.create_from_map(
             self._world.obstacle_positions, self._world.buffer_reso
         )
 
         self._objects = self._robot_collection + self._obstacle_collection + self._map_collection
+        self.build_tree()
 
         # env parameters
         self._env_plot = EnvPlot(
@@ -161,13 +162,14 @@ class EnvBase:
         [obj.step() for obj in self.objects if obj._id != obj_id]
 
     # render
-    def render(self, interval: float = 0.05, figure_kwargs=dict(), **kwargs):
+    def render(self, interval: float = 0.05, figure_kwargs=dict(), mode: str = "dynamic", **kwargs):
         """
         Render the environment.
 
         Args:
             interval(float) :  Time interval between frames in seconds.
             figure_kwargs(dict) : Additional keyword arguments for saving figures, see `savefig <https://matplotlib.org/3.1.1/api/_as_gen/matplotlib.pyplot.savefig.html>`_ for detail.
+            mode(str) : "dynamic", "static", "all" to specify which type of objects to draw and clear.
             kwargs: Additional keyword arguments for drawing components. see :py:meth:`.ObjectBase.plot` function for detail.
         """
 
@@ -180,8 +182,8 @@ class EnvBase:
                 if self.save_ani:
                     self.save_figure(save_gif=True, **figure_kwargs)
 
-                self._env_plot.clear_components("dynamic", self.objects)
-                self._env_plot.draw_components("dynamic", self.objects, **kwargs)
+                self._env_plot.clear_components(mode, self.objects)
+                self._env_plot.draw_components(mode, self.objects, **kwargs)
 
     def show(self):
         """
@@ -486,17 +488,35 @@ class EnvBase:
 
     # region: object operation
 
+    def create_obstacle(self, **kwargs):
+
+        """
+        Create an obstacle in the environment.
+
+        Args:
+            **kwargs: Additional parameters for obstacle creation.
+                see ObjectFactory.create_obstacle for detail
+
+        Returns:
+            Obstacle: An instance of an obstacle.
+        """
+
+        return self.object_factory.create_obstacle(**kwargs)
+
+
     def add_object(self, obj: ObjectBase):
         """
         Add the object to the environment.
         """
         self._objects.append(obj)
+        self.build_tree()
     
     def add_objects(self, objs: list):
         """
         Add the objects to the environment.
         """
         self._objects.extend(objs)
+        self.build_tree()
 
 
     def delete_object(self, target_id: int):
@@ -509,6 +529,8 @@ class EnvBase:
                 obj.plot_clear()
                 self._objects.remove(obj)
                 break
+        
+        self.build_tree()
     
     def delete_objects(self, target_ids: list):
         """
@@ -520,9 +542,18 @@ class EnvBase:
         for obj in del_obj:
             obj.plot_clear()
             self._objects.remove(obj)
+        
+        self.build_tree()
+
+
+    def build_tree(self):
+        """
+        Build the geometry tree for the objects in the environment to detect the possible collision objects.
+        """
+        tree = STRtree([obj.geometry for obj in self._objects])
+        env_param.GeometryTree = tree
 
     # endregion: object operation
-
 
 
     # region: get information
@@ -619,8 +650,6 @@ class EnvBase:
             file_name, file_format, include_index, save_gif, **kwargs
         )
 
-    # region: property
-
     def load_behavior(self, behaviors: str = "behavior_methods"):
         """
         Load behavior parameters from the script. Please refer to the behavior_methods.py file for more details.
@@ -635,64 +664,8 @@ class EnvBase:
         except ImportError as e:
             print(f"Failed to load module '{behaviors}': {e}")
 
-    @property
-    def arrive(self, id: Optional[int] = None, mode: Optional[str] = None):
-        """
-        Check if the robot(s) have arrived at their destination.
 
-        Args:
-            id (int, optional): Id of the specific robot to check. Default is None.
-            mode (str, optional): Mode to check for all or any robots. Must be 'all' or 'any'. Default is None.
-
-        Returns:
-            bool: Arrival status of the specified robot or all/any robots.
-        """
-
-        # If a specific robot id is provided
-        if id is not None:
-            # Ensure the id is an integer
-            assert isinstance(id, int), "id should be integer"
-            # Return the arrival status of the specified robot
-            return self.robot_list[id].arrive
-        else:
-            # Ensure the mode is either 'all' or 'any'
-            assert mode in ["all", "any"], "mode should be all or any"
-            # Return True if all robots have arrived, otherwise return True if any robot has arrived
-            return (
-                all([obj.arrive for obj in self.robot_list])
-                if mode == "all"
-                else any([obj.arrive for obj in self.robot_list])
-            )
-
-    @property
-    def check_collision(self, id: Optional[int] = None, mode: Optional[str] = None):
-        """
-        Check if the robot(s) have collided.
-
-        Args:
-            id (int, optional): Id of the specific robot to check. Default is None.
-            mode (str, optional): Mode to check for all or any robots. Must be 'all' or 'any'. Default is None.
-
-        Returns:
-            bool: Collision status of the specified robot or all/any robots.
-        """
-
-        # If a specific robot id is provided
-        if id is not None:
-            # Ensure the id is an integer
-            assert isinstance(id, int), "id should be integer"
-            # Return the collision status of the specified robot
-            return self.robot_list[id].collision
-        else:
-            # Ensure the mode is either 'all' or 'any'
-            assert mode in ["all", "any"], "mode should be all or any"
-            # Return True if all robots have collided, otherwise return True if any robot has collided
-            return (
-                all([obj.collision for obj in self.robot_list])
-                if mode == "all"
-                else any([obj.collision for obj in self.robot_list])
-            )
-
+    # region: property
     @property
     def robot_list(self):
         """
@@ -733,6 +706,10 @@ class EnvBase:
     @property
     def robot_number(self):
         return len(self.robot_list)
+    
+    @property
+    def logger(self):
+        return env_param.logger
 
     # endregion: property
 

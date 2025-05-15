@@ -402,7 +402,7 @@ class ObjectBase:
                 self.stop_flag = False
         else:
             if world_param.count % 50 == 0 and self.role == "robot":
-                env_param.logger.warning(f"collision mode {world_param.collision_mode} is not defined within [stop, reactive, unobstructed, unobstructed_obstacles], the unobstructed mode is used")
+                self.logger.warning(f"collision mode {world_param.collision_mode} is not defined within [stop, reactive, unobstructed, unobstructed_obstacles], the unobstructed mode is used")
         
 
     def check_arrive_status(self):
@@ -428,22 +428,20 @@ class ObjectBase:
         Check if the object is in collision with others.
         """
         collision_flags = []
-
         self.collision_obj = []
 
-        for obj in self.external_objects:
-            if not obj.unobstructed:
-                if self.check_collision(obj):
-                    collision_flags.append(True)
-                    self.collision_obj.append(obj)
-                    
-                    if self.role == "robot":
-                        if not self.collision_flag:
-                            env_param.logger.warning(
-                                f"{self.name} collided with {obj.name} at state {np.round(self.state[:3, 0], 2).tolist()}"
-                            )
-                else:
-                    collision_flags.append(False)
+        for obj in self.possible_collision_objects:
+            if self.check_collision(obj):
+                collision_flags.append(True)
+                self.collision_obj.append(obj)
+            
+                if self.role == "robot":
+                    if not self.collision_flag:
+                        self.logger.warning(
+                            f"{self.name} collided with {obj.name} at state {np.round(self.state[:3, 0], 2).tolist()}"
+                        )
+            else:
+                collision_flags.append(False)
 
         self.collision_flag = any(collision_flags)
 
@@ -492,7 +490,7 @@ class ObjectBase:
         if velocity is None:
             if self.beh_config is None:
                 if self.role == "robot":
-                    env_param.logger.warning(
+                    self.logger.warning(
                         "behavior and input velocity is not defined, robot will stay static"
                     )
 
@@ -750,7 +748,7 @@ class ObjectBase:
                     )
                     counter += 1
                 if counter == max_attempts:
-                    env_param.logger.warning(
+                    self.logger.warning(
                         f"Could not place the goal in a position free of obstacles in {max_attempts} tries"
                     )
             else :
@@ -802,6 +800,21 @@ class ObjectBase:
             self._init_goal = goal_deque
 
         self._goal = goal_deque
+
+
+    def set_laser_color(self, laser_indices, laser_color: str = 'cyan'):
+        """
+        Set the color of the lasers.
+
+        Args:
+            laser_indices (list): The indices of the lasers to set the color.
+            laser_color (str): The color to set the lasers. Default is 'cyan'.
+        """
+
+        if self.lidar is not None:
+            self.lidar.set_laser_color(laser_indices, laser_color)
+        else:
+            self.logger.warning("No lidar sensor found for this object.")
 
     def geometry_state_transition(self):
         pass
@@ -1588,6 +1601,31 @@ class ObjectBase:
         return self
 
     @property
+    def possible_collision_objects(self):
+
+        '''
+        Get the possible collision objects of the object from the tree.
+
+        Returns:
+            list: The possible collision objects of the object.
+        '''
+
+        tree = env_param.GeometryTree
+        possible = []
+
+        candidates_index = tree.query(self.geometry)
+        
+        for index in candidates_index:
+            obj = env_param.objects[index]
+
+            if obj.unobstructed or obj.id == self.id:
+                continue
+            else:
+                possible.append(obj)
+
+        return possible
+
+    @property
     def desired_omni_vel(self, goal_threshold=0.1):
         """
         Calculate the desired omnidirectional velocity.
@@ -1682,3 +1720,40 @@ class ObjectBase:
         '''
 
         return self.obj_behavior.behavior_dict
+    
+    @property
+    def logger(self):
+        """
+        Get the logger of the env_param.
+
+        Returns:
+            Logger: The logger associated in the env_param.
+        """
+        
+        return env_param.logger
+
+
+    @property
+    def heading(self):
+        """
+        Get the heading of the object.
+
+        Returns:
+            float: The heading of the object.
+        """
+
+        if self.kinematics == "omni":
+            heading = atan2(self.velocity[1, 0], self.velocity[0, 0])
+        elif self.kinematics == "diff" or self.kinematics == "acker":
+            heading = self.state[2, 0]
+        else:
+            self.logger.warning(f"The kinematics of the object {self.name} is not supported.")
+
+        return heading
+
+    @property
+    def orientation(self):
+        """
+        Get the orientation of the object.
+        """
+        return self.state[2, 0]
